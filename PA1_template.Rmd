@@ -1,0 +1,115 @@
+---
+title: "Human Activity Recognition"
+output:
+  html_document:
+    keep_md: yes
+  pdf_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache=TRUE)
+```
+```{r message=FALSE, warning=FALSE, error=FALSE}
+library(caret)
+library(randomForest)
+library(parallel)
+library(doParallel)
+```
+## Synopsis
+In this paper we will use the Human Activity Recognition (HAR) dataset to predict how well a subject did an exercise.
+This is a multiclass classigication problem in which we will perform the folowing steps:
+
+* Initial data analysis and pre-processing
+* Data splitting into training and testing sets
+* Random-Forest training on 3-Fold Cross-Validation
+* Scoring and validation on the validation set.
+
+## Initial Analysis and Pre-Processing
+Loading the data we see many empty fieldsand fields with values of "#DIV/0!".
+We will consider these values as NA.
+```{r}
+train <- read.csv("C:/Users/tlevy/Desktop/Tal/Opera/Courses/JHU Data Science/scripts/HAR/pml-training.csv", na.strings = c("#DIV/0!","NA",""))
+test <- read.csv("C:/Users/tlevy/Desktop/Tal/Opera/Courses/JHU Data Science/scripts/HAR/pml-testing.csv", na.strings = c("#DIV/0!","NA",""))
+
+dim(train)
+dim(test)
+#summary(train)
+#table(train$classe)
+```
+Our data consists of 160 columns.
+Our first step will be removing columns with not enough available data.
+Columns with over 70% null values will be removed.
+In addition, the first seven columns in the dataset give us information that is redundant for modeling (index of sample, user name and five time features) and will be removed as well.
+```{r}
+nulls<-(colSums(is.na(train))/nrow(train))>0.7
+train <- train[!nulls]
+test <- test[!nulls]
+# names(train[(colSums(is.na(train))/nrow(train))<0.7])
+train <- train[,-(1:7)]
+test <- test[,-(1:7)]
+```
+Next step will be a more analytical feature selection.
+We will remove features that do not add additional information.
+We will perform pairwise correlation and remove the columns with over 75% pairwise correlation.
+```{r}
+correlationMatrix<-cor(train[-53])
+highCorrelation <- findCorrelation(correlationMatrix, cutoff=0.75)
+train <- train[-highCorrelation]
+test <- test[-highCorrelation]
+
+dim(train)
+dim(test)
+```
+We are left with 32 variables and our dataset is now 1/5 the size of the original set.
+## Data Splitting and Training
+We will start the training process by splitting our data to 70% training and 30% validation.
+```{r}
+set.seed(12345)
+inTrain <- createDataPartition(y=train$classe,p=0.7,list = FALSE)
+training <- train[inTrain,]
+validation <- train[-inTrain,]
+```
+We will use 3-Fold Cross Validation on the training set and train using Random-Forest method.
+For faster training, we will use parallel processing.
+```{r}
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "cv",
+                           number = 3,
+                           allowParallel = TRUE)
+modRF<-train(classe~.,data = training, method = "rf", trControl=fitControl)
+stopCluster(cluster)
+registerDoSEQ()
+```
+Looking at the created model we see very good results:
+
+* All 3 folds performed well with accuracy over 97.7%
+* Out Of Sample error rate of chosen model is as low as 0.87%
+* Average accuracy is over 98%
+
+```{r}
+modRF
+modRF$finalModel
+modRF$resample
+confusionMatrix.train(modRF)
+```
+## Validation
+our final step will be checking performance on the validation set
+```{r}
+validation.predict <- predict(modRF,validation)
+confusionMatrix(validation.predict,validation$classe)
+```
+At 98.7%, accuracy on the validation set is also very high proving our model to be very efficient.
+
+## Conclusions 
+* While the initial dataset had many variables, ony 1/5 was needed for building an accurate model.
+* Random-Forest model using 3-Fold Cross-Validation was proven to give very high accuracy.
+* The OOS estimate of error rate was very close to the validation error.
+
+## Appendix A
+### Course Project Prediction Quiz Portion
+The following is the model prediction on the test set
+```{r}
+test.predict <- predict(modRF,test)
+test.predict
+submisison <- data.frame(test$problem_id,test.predict)
+```
